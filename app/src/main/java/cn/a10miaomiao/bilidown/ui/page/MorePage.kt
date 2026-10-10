@@ -18,15 +18,18 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.datastore.preferences.core.edit
 import androidx.navigation.NavHostController
 import cn.a10miaomiao.bilidown.R
 import cn.a10miaomiao.bilidown.common.BiliDownUtils
 import cn.a10miaomiao.bilidown.common.datastore.DataStoreKeys
+import cn.a10miaomiao.bilidown.common.datastore.dataStore
 import cn.a10miaomiao.bilidown.common.datastore.rememberDataStorePreferencesFlow
 import cn.a10miaomiao.bilidown.common.molecule.collectAction
 import cn.a10miaomiao.bilidown.common.molecule.rememberPresenter
@@ -38,6 +41,7 @@ import cn.a10miaomiao.bilidown.ui.components.SettingItem
 import cn.a10miaomiao.bilidown.ui.components.ShizukuHelpDialog
 import cn.a10miaomiao.bilidown.ui.components.ShizukuHelpDialogAction
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 
 data class MorePageState(
     val versionName: String,
@@ -76,6 +80,12 @@ fun MorePage(
     val context = LocalContext.current
     val shizukuPermission = localShizukuPermission()
     val shizukuPermissionState by shizukuPermission.collectState()
+    val enabledZeroWidthPath by rememberDataStorePreferencesFlow(
+        context = context,
+        key = DataStoreKeys.enabledZeroWidthPath,
+        initial = true,
+    ).collectAsState(true)
+    val scope = rememberCoroutineScope()
     val (state, channel) = rememberPresenter {
         MorePagePresenter(context, it)
     }
@@ -131,6 +141,30 @@ fun MorePage(
             }
         ) {
             changeShizukuEnabled(!shizukuPermissionState.isEnabled)
+        }
+
+        SettingItem(
+            title = "绕过访问授权",
+            desc = "使用零宽路径访问 Android/data",
+            icon = Icons.Outlined.Info,
+            action = {
+                Switch(
+                    checked = enabledZeroWidthPath,
+                    onCheckedChange = { enabled ->
+                        scope.launch {
+                            context.dataStore.edit {
+                                it[DataStoreKeys.enabledZeroWidthPath] = enabled
+                            }
+                        }
+                    },
+                )
+            }
+        ) {
+            scope.launch {
+                context.dataStore.edit {
+                    it[DataStoreKeys.enabledZeroWidthPath] = !enabledZeroWidthPath
+                }
+            }
         }
 
         SettingItem(

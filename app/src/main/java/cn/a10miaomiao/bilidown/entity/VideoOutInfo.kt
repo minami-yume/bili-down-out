@@ -9,4 +9,5 @@ data class VideoOutInfo(
     val outFilePath: String,
     val name: String,
     val cover: String,
+    val outputType: Int = 1,
 ) : Parcelable

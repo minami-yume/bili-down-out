@@ -36,6 +36,11 @@ object BiliDownUtils {
             "com.a10miaomiao.bilimiao",
             icon = R.drawable.ic_bilimiao
         ),
+        BiliAppInfo(
+            "PiliPlus",
+            "com.example.piliplus",
+            icon = R.drawable.ic_piliplus
+        ),
 //        BiliAppInfo(
 //            "bilimiao-dev",
 //            "cn.a10miaomiao.bilimiao.dev",

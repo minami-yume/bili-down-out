@@ -9,18 +9,18 @@ import kotlinx.serialization.Serializable
 data class BiliDownloadEntryInfo(
     val media_type: Int = 1,
     val has_dash_audio: Boolean = false,
-    var is_completed: Boolean,
-    var total_bytes: Long,
-    var downloaded_bytes: Long,
-    val title: String,
+    var is_completed: Boolean = false,
+    var total_bytes: Long = 0,
+    var downloaded_bytes: Long = 0,
+    val title: String = "",
     val type_tag: String? = null,
-    val cover: String,
+    val cover: String = "",
     val video_quality: Int? = null,
-    val prefered_video_quality: Int,
+    val prefered_video_quality: Int = 0,
     val quality_pithy_description: String = "",
-    val guessed_total_bytes: Int,
-    var total_time_milli: Long,
-    val danmaku_count: Int,
+    val guessed_total_bytes: Int = 0,
+    var total_time_milli: Long = 0,
+    val danmaku_count: Int = 0,
     val time_update_stamp: Long = 0L,
     val time_create_stamp: Long = 0L,
     val can_play_in_advance: Boolean = false,
@@ -29,6 +29,7 @@ data class BiliDownloadEntryInfo(
     val spid: Long? = null,
     val bvid: String? = null,
     val owner_id: Long? = null,
+    val owner_name: String? = null,
     var page_data: PageInfo? = null,
     val season_id: String? = null,
     val source: SourceInfo? = null,
@@ -37,7 +38,7 @@ data class BiliDownloadEntryInfo(
 
     val key: Long
         get() {
-            return source?.cid ?: page_data?.cid ?: avid!!
+            return source?.cid ?: page_data?.cid ?: avid ?: 0L
         }
 
     val name: String

@@ -13,6 +13,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import cn.a10miaomiao.bilidown.common.BiliDownOutFile
+import cn.a10miaomiao.bilidown.common.FileNameUtils
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -20,6 +21,7 @@ import kotlinx.coroutines.launch
 fun FileNameInputDialog(
     showInputDialog: Boolean,
     fileName: String,
+    extension: String = "mp4",
     confirmText: String,
     onDismiss: () -> Unit,
     onConfirm: (outFile: BiliDownOutFile) -> Unit,
@@ -40,11 +42,11 @@ fun FileNameInputDialog(
     }
 
     fun handleConfirm() {
-        val name = value.text + ".mp4"
+        val name = value.text + ".$extension"
         if (name.isBlank()) {
             errorText = "文件名不能为空"
-        } else if (name.indexOf(' ') > 0) {
-            errorText = "文件名不能含有格"
+        } else if (!FileNameUtils.isValid(name)) {
+            errorText = "文件名含有不支持的字符或是系统保留名称"
         } else {
             val outFile = BiliDownOutFile(name)
             if (outFile.exists()) {
@@ -55,8 +57,8 @@ fun FileNameInputDialog(
         }
     }
 
-    fun handleClearSpace() {
-        val text = value.text.replace(" ", "")
+    fun handleSanitizeName() {
+        val text = FileNameUtils.sanitize(value.text)
         value = TextFieldValue(
             text = text,
             selection = TextRange(text.length)
@@ -73,7 +75,7 @@ fun FileNameInputDialog(
                         Text(text = "文件名")
                     },
                     trailingIcon = {
-                        Text(text = ".mp4")
+                        Text(text = ".$extension")
                     },
                     supportingText = {
                         Text(text = errorText)
@@ -103,11 +105,11 @@ fun FileNameInputDialog(
             },
             dismissButton = {
                 Row() {
-                    if (" " in value.text) {
+                    if (FileNameUtils.sanitize(value.text) != value.text) {
                         TextButton(
-                            onClick = ::handleClearSpace,
+                            onClick = ::handleSanitizeName,
                         ) {
-                            Text("清除空格")
+                            Text("清理非法字符")
                         }
                     }
                     TextButton(

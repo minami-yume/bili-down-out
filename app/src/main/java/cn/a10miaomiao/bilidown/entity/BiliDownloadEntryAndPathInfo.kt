@@ -8,4 +8,5 @@ data class BiliDownloadEntryAndPathInfo(
     val pageDirPath: String,
     val entryDirPath: String,
     val entry: BiliDownloadEntryInfo,
+    val rawEntryJson: String = "",
 ): Parcelable

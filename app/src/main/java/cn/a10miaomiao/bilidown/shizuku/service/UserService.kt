@@ -7,10 +7,10 @@ import android.util.Log
 import androidx.annotation.Keep
 import cn.a10miaomiao.bilidown.callback.ProgressCallback
 import cn.a10miaomiao.bilidown.common.BiliEntryJsonParser
+import cn.a10miaomiao.bilidown.common.BiliEntryJsonCompatibility
 import cn.a10miaomiao.bilidown.common.CommandUtil
 import cn.a10miaomiao.bilidown.common.MiaoLog
 import cn.a10miaomiao.bilidown.entity.BiliDownloadEntryAndPathInfo
-import cn.a10miaomiao.bilidown.entity.BiliDownloadEntryInfo
 import cn.a10miaomiao.bilidown.entity.VideoOutInfo
 import cn.a10miaomiao.bilidown.shizuku.IUserService
 import io.microshow.rxffmpeg.RxFFmpegCommandList
@@ -20,13 +20,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import kotlin.coroutines.CoroutineContext
+import kotlin.system.exitProcess
 
 
-class UserService: IUserService.Stub, CoroutineScope {
+class UserService : IUserService.Stub, CoroutineScope {
 
     private val job: Job = Job()
     override val coroutineContext: CoroutineContext
@@ -42,8 +42,7 @@ class UserService: IUserService.Stub, CoroutineScope {
     /**
      * Constructor with Context. This is only available from Shizuku API v13.
      *
-     *
-     * This method need to be annotated with [Keep] to prevent ProGuard from removing it.
+     * This method needs to be annotated with [Keep] to prevent ProGuard from removing it.
      *
      * @param context Context created with createPackageContextAsUser
      * @see [code used to create the instance of this class](https://github.com/RikkaApps/Shizuku-API/blob/672f5efd4b33c2441dbf609772627e63417587ac/server-shared/src/main/java/rikka/shizuku/server/UserService.java.L66)
@@ -59,7 +58,7 @@ class UserService: IUserService.Stub, CoroutineScope {
     override fun destroy() {
         Log.i("UserService", "destroy")
         job.cancel()
-        System.exit(0)
+        exitProcess(0)
     }
 
     override fun exit() {
@@ -68,8 +67,8 @@ class UserService: IUserService.Stub, CoroutineScope {
 
     @Throws(RemoteException::class)
     override fun doSomething(): String {
-        Log.i("UserService", "doSomething," + "pid=" + Os.getpid() + ", uid=" + Os.getuid())
-        return "pid=" + Os.getpid() + ", uid=" + Os.getuid()
+        Log.i("UserService", "doSomething, pid=${Os.getpid()}, uid=${Os.getuid()}")
+        return "pid=${Os.getpid()}, uid=${Os.getuid()}"
     }
 
     @Throws(RemoteException::class)
@@ -81,8 +80,7 @@ class UserService: IUserService.Stub, CoroutineScope {
         val dir = File(path)
         val list = mutableListOf<BiliDownloadEntryAndPathInfo>()
         if (dir.exists() && dir.isDirectory) {
-            dir.listFiles()
-                ?.filter { it.isDirectory }
+            dir.listFiles { file -> file.isDirectory }
                 ?.forEach {
                     MiaoLog.debug { it.path }
                     list.addAll(readDownloadDirectory(it.path))
@@ -99,22 +97,22 @@ class UserService: IUserService.Stub, CoroutineScope {
         val dir = File(path)
         val list = mutableListOf<BiliDownloadEntryAndPathInfo>()
         if (dir.exists() && dir.isDirectory) {
-            dir.listFiles()
-                ?.filter { pageDir -> pageDir.isDirectory }
-                ?.map {
-                    Pair(it, File(it.path + "/entry.json"))
-                }
-                ?.filter { it.second.exists() }
-                ?.forEach {
-                    val (entryDir, entryFile) = it
-                    val entryJson = entryFile.readText()
-                    val entry = BiliEntryJsonParser.parseOrNull(entryJson)
-                        ?: return@forEach
-                    list.add(BiliDownloadEntryAndPathInfo(
-                        entry = entry,
-                        entryDirPath = entryDir.path,
-                        pageDirPath = dir.path
-                    ))
+            dir.listFiles { file -> file.isDirectory }
+                ?.forEach { entryDir ->
+                    val entryFile = File(entryDir, "entry.json")
+                    if (entryFile.exists()) {
+                        val entryJson = entryFile.readText()
+                        val entry = BiliEntryJsonParser.parseOrNull(entryJson)
+                            ?: return@forEach
+                        list.add(
+                            BiliDownloadEntryAndPathInfo(
+                                entry = entry,
+                                entryDirPath = entryDir.path,
+                                pageDirPath = dir.path,
+                                rawEntryJson = entryJson,
+                            )
+                        )
+                    }
                 }
         }
         return list
@@ -125,16 +123,22 @@ class UserService: IUserService.Stub, CoroutineScope {
         outFilePath: String?,
         callback: ProgressCallback?
     ): String? {
+        if (entryDirPath.isNullOrBlank() || outFilePath.isNullOrBlank()) {
+            return "文件路径不能为空"
+        }
         val entryDirFile = File(entryDirPath)
         val entryJsonFile = File(entryDirPath, "entry.json")
+        if (!entryJsonFile.exists()) {
+            return "entry.json 文件不存在"
+        }
         val outFile = File(outFilePath)
         val entry = BiliEntryJsonParser.parseOrNull(entryJsonFile.readText())
             ?: return "entry.json 文件为空或已损坏"
-        val videoDirPath = entryDirPath + "/" + entry.videoDirName
+        val videoDirPath = "$entryDirPath/${entry.videoDirName}"
         val videoDir = File(videoDirPath)
         val videoOutInfo = VideoOutInfo(
-            entryDirPath = entryDirPath!!,
-            outFilePath = outFilePath!!,
+            entryDirPath = entryDirPath,
+            outFilePath = outFilePath,
             name = outFile.name,
             cover = entry.cover,
         )
@@ -162,7 +166,7 @@ class UserService: IUserService.Stub, CoroutineScope {
             val blvFiles = mutableListOf<File>()
             var blvIndex = 0
             while (true) {
-                val file = File(videoDir, "/${blvIndex}.blv")
+                val file = File(videoDir, "${blvIndex}.blv")
                 if (file.exists()) {
                     blvFiles.add(file)
                     blvIndex++
@@ -200,20 +204,108 @@ class UserService: IUserService.Stub, CoroutineScope {
         }
     }
 
+    override fun exportBiliAudio(
+        entryDirPath: String?,
+        outFilePath: String?,
+        callback: ProgressCallback?
+    ): String? {
+        if (entryDirPath.isNullOrBlank() || outFilePath.isNullOrBlank()) return "文件路径不能为空"
+        val entryDir = File(entryDirPath)
+        val entry = BiliEntryJsonParser.parseOrNull(File(entryDir, "entry.json").takeIf { it.exists() }?.readText() ?: "")
+            ?: return "entry.json 文件为空或已损坏"
+        val outFile = File(outFilePath)
+        val videoDir = File(entryDir, entry.videoDirName)
+        val audioFile = File(videoDir, "audio.m4s")
+        if (!audioFile.isFile) return "找不到 audio.m4s，当前缓存格式无法直接导出音频"
+
+        val info = VideoOutInfo(entryDirPath, outFilePath, outFile.name, entry.cover, 2)
+        val coverFile = File(entryDir, "cover.jpg").takeIf { it.isFile && it.length() > 0 }
+        outFile.parentFile?.mkdirs()
+        if (coverFile == null) {
+            callback?.onStart(info)
+            launch {
+                try {
+                    copyFile(audioFile, outFile)
+                    callback?.onFinish(info)
+                } catch (e: Exception) {
+                    outFile.delete()
+                    callback?.onError(info, e.message ?: "复制音频缓存失败")
+                }
+            }
+            return null
+        }
+
+        val commands = RxFFmpegCommandList().apply {
+            append("-y")
+            append("-i"); append(audioFile.absolutePath)
+            append("-i"); append(coverFile.absolutePath)
+            append("-map"); append("0:a:0")
+            append("-map"); append("1:v:0")
+            append("-c:a"); append("libmp3lame")
+            append("-q:a"); append("2")
+            append("-c:v"); append("copy")
+            append("-id3v2_version"); append("3")
+            append("-metadata:s:v:0"); append("title=Album cover")
+            append("-metadata:s:v:0"); append("comment=Cover (front)")
+            append("-disposition:v:0"); append("attached_pic")
+            entry.owner_name?.takeIf { it.isNotBlank() }?.let { ownerName ->
+                append("-metadata"); append("artist=$ownerName")
+            }
+            append(outFile.absolutePath)
+        }.build()
+        callback?.onStart(info)
+        RxFFmpegInvoke.getInstance().runCommandRxJava(commands)
+            .subscribe(ShizukuRxFFmpegSubscriber(info, callback))
+        return null
+    }
+
+    override fun migrateCache(sourceDirectoryPath: String?, targetDirectoryPath: String?, targetEntryTemplate: String?): String? {
+        if (sourceDirectoryPath.isNullOrBlank() || targetDirectoryPath.isNullOrBlank() || targetEntryTemplate.isNullOrBlank()) return "目录路径或目标 entry 模板不能为空"
+        val source = File(sourceDirectoryPath)
+        val target = File(targetDirectoryPath)
+        if (!source.isDirectory) return "Shizuku 无法访问源缓存目录：$sourceDirectoryPath"
+        if (target.exists()) return "目标客户端已有同名缓存目录，为避免覆盖已取消迁移"
+        return try {
+            target.parentFile?.mkdirs()
+            source.copyRecursively(target, overwrite = false)
+            target.walkTopDown().filter { it.isFile && it.name == "entry.json" }.forEach { entryFile ->
+                entryFile.writeText(BiliEntryJsonCompatibility.convertForMigration(entryFile.readText(), targetEntryTemplate))
+            }
+            target.walkTopDown().forEach {
+                it.setReadable(true, false)
+                it.setWritable(true, false)
+                if (it.isDirectory) it.setExecutable(true, false)
+            }
+            null
+        } catch (e: Exception) {
+            target.deleteRecursively()
+            e.message ?: "复制缓存目录失败"
+        }
+    }
+
+    override fun deleteCacheEntry(sourceDirectoryPath: String?, sourcePackageName: String?): String? {
+        if (sourceDirectoryPath.isNullOrBlank() || sourcePackageName.isNullOrBlank()) return "缓存路径不能为空"
+        val path = sourceDirectoryPath.replace("/storage/emulated/0\u200B/Android/data/", "/storage/emulated/0/Android/data/")
+        val relativeDownloadPath = if (sourcePackageName == "com.example.piliplus") "files/download" else "download"
+        val allowedRoot = "/storage/emulated/0/Android/data/$sourcePackageName/$relativeDownloadPath/"
+        if (!path.startsWith(allowedRoot) || !path.removePrefix(allowedRoot).matches(Regex("\\d+"))) {
+            return "删除路径必须是下载目录下按视频 ID 命名的文件夹"
+        }
+        val directory = File(path)
+        if (!directory.isDirectory) return "找不到要删除的视频缓存目录"
+        return try {
+            if (directory.deleteRecursively()) null else "无法完整删除缓存目录"
+        } catch (e: Exception) {
+            e.message ?: "删除缓存目录失败"
+        }
+    }
+
     private suspend fun copyFile(
         inputFile: File,
         outFile: File
-    ) {
-        val fileInputStream = FileInputStream(inputFile)
-        val fileOutputStream = FileOutputStream(outFile)
-        val buffer = ByteArray(1024)
-        var byteRead: Int
-        while (-1 != fileInputStream.read(buffer).also { byteRead = it }) {
-            fileOutputStream.write(buffer, 0, byteRead)
-        }
-        fileInputStream.close()
-        fileOutputStream.flush()
-        fileOutputStream.close()
+    ) = withContext(Dispatchers.IO) {
+        outFile.parentFile?.mkdirs()
+        inputFile.copyTo(outFile, overwrite = true)
     }
 
     private fun mergerVideoAndAudio(
@@ -222,9 +314,7 @@ class UserService: IUserService.Stub, CoroutineScope {
         outFile: File,
         subscriber: RxFFmpegSubscriber,
     ) {
-        if (outFile.parentFile!!.exists()){
-            outFile.parentFile!!.mkdir()
-        }
+        outFile.parentFile?.mkdirs()
         val commands = RxFFmpegCommandList().apply {
             append("-i")
             append(videoFile.absolutePath)
@@ -236,7 +326,7 @@ class UserService: IUserService.Stub, CoroutineScope {
             append("experimental")
             append(outFile.absolutePath)
         }.build()
-        //开始执行FFmpeg命令
+        // 开始执行FFmpeg命令
         RxFFmpegInvoke.getInstance()
             .runCommandRxJava(commands)
             .subscribe(subscriber)
@@ -247,17 +337,14 @@ class UserService: IUserService.Stub, CoroutineScope {
         outFile: File,
         subscriber: RxFFmpegSubscriber,
     ) {
-        if (outFile.parentFile!!.exists()){
-            outFile.parentFile!!.mkdir()
-        }
+        outFile.parentFile?.mkdirs()
         val ffTxtFile = File(outFile.parent, ".ff.txt")
-        if (ffTxtFile.exists() && ffTxtFile.isDirectory) {
+        if (ffTxtFile.exists()) {
             ffTxtFile.deleteRecursively()
-            ffTxtFile.delete()
         }
-        val ffTxtContent = videoFiles.map {
-            file -> "file ${CommandUtil.filePath(file)}"
-        }.joinToString("\n")
+        val ffTxtContent = videoFiles.joinToString("\n") { file ->
+            "file ${CommandUtil.filePath(file)}"
+        }
         ffTxtFile.writeText(ffTxtContent)
 
         val commands = RxFFmpegCommandList().apply {
@@ -271,7 +358,7 @@ class UserService: IUserService.Stub, CoroutineScope {
             append("copy")
             append(outFile.absolutePath)
         }.build()
-        //开始执行FFmpeg命令
+        // 开始执行FFmpeg命令
         RxFFmpegInvoke.getInstance()
             .runCommandRxJava(commands)
             .subscribe(subscriber)

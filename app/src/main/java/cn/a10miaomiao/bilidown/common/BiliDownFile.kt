@@ -22,20 +22,61 @@ class BiliDownFile(
     val context: Context,
     val packageName: String,
     val enabledShizuku: Boolean,
+    private val enabledZeroWidthPath: Boolean = true,
 ) {
 
     private val TAG = "BiliDownFile"
     private val externalStorage = Environment.getExternalStorageDirectory()
-    private val DIR_DOWNLOAD = "download"
+    private val DIR_DOWNLOAD = if (packageName == "com.example.piliplus") {
+        "files/download"
+    } else {
+        "download"
+    }
     var path = ""
     var list = emptyList<String>()
+    private var useZeroWidthPath = false
 
     fun canRead(): Boolean {
         if (enabledShizuku) {
             return true
         }
-        val downloadDir = createMiaoFile(DIR_DOWNLOAD)
-        return downloadDir.canRead()
+        if (enabledZeroWidthPath) {
+            // Try the U+200B path first. On Android builds where this path works,
+            // no SAF/Android-data folder grant is needed.
+            val zeroWidthDir = try {
+                createZeroWidthFile(DIR_DOWNLOAD)
+            } catch (_: Exception) {
+                null
+            }
+            val zeroWidthAppDir = try {
+                createZeroWidthFile("")
+            } catch (_: Exception) {
+                null
+            }
+            val canAccessDownloadPath = when {
+                zeroWidthDir == null -> false
+                zeroWidthDir.exists() -> zeroWidthDir.isDirectory && zeroWidthDir.canRead()
+                else -> zeroWidthAppDir?.let {
+                    it.exists() && it.isDirectory && it.canRead()
+                } == true
+            }
+            if (canAccessDownloadPath) {
+                useZeroWidthPath = true
+                return true
+            }
+            useZeroWidthPath = false
+            return false
+        }
+
+        // Preserve the existing SAF authorization flow when direct access fails.
+        useZeroWidthPath = false
+        val authorizedDir = try {
+            createMiaoFile(DIR_DOWNLOAD)
+        } catch (_: Exception) {
+            null
+        }
+        if (authorizedDir?.canRead() == true) return true
+        return false
     }
 
     @Throws(TimeoutCancellationException::class)
@@ -48,6 +89,9 @@ class BiliDownFile(
             val userService = RemoteServiceUtil.getUserService()
             list.addAll(userService.readDownloadList(downloadDir.path))
         } else {
+            if (!downloadDir.exists() || !downloadDir.isDirectory) {
+                return emptyList()
+            }
             downloadDir.listFiles()
                 .filter { it.isDirectory }
                 .forEach {
@@ -85,7 +129,8 @@ class BiliDownFile(
                 BiliDownloadEntryAndPathInfo(
                     entry = entry,
                     entryDirPath = entryDir.path,
-                    pageDirPath = dir.path
+                    pageDirPath = dir.path,
+                    rawEntryJson = entryJson,
                 )
             }
     }
@@ -105,6 +150,7 @@ class BiliDownFile(
         dirName: String,
     ): MiaoFile {
         if (!enabledShizuku && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {  // 10以上
+            if (useZeroWidthPath) return createZeroWidthFile(dirName)
             return MiaoDocumentFile(
                 context,
                 getDocumentFileId(),
@@ -116,6 +162,12 @@ class BiliDownFile(
             file.mkdir()
         }
         return MiaoJavaFile(file)
+    }
+
+    /** Some Android builds resolve the invisible character as a scoped-storage bypass. */
+    private fun createZeroWidthFile(dirName: String): MiaoFile {
+        val path = "/storage/emulated/0\u200B/Android/data/$packageName/$dirName"
+        return MiaoJavaFile(path)
     }
 
     private fun getExternalDir(): String {

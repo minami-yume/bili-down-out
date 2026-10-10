@@ -3,6 +3,7 @@ package cn.a10miaomiao.bilidown.service
 import android.util.Log
 import cn.a10miaomiao.bilidown.callback.ProgressCallback
 import cn.a10miaomiao.bilidown.common.MiaoLog
+import cn.a10miaomiao.bilidown.db.dao.OutRecord
 import cn.a10miaomiao.bilidown.entity.VideoOutInfo
 import cn.a10miaomiao.bilidown.state.AppState
 import cn.a10miaomiao.bilidown.state.TaskStatus
@@ -18,7 +19,8 @@ class MyProgressCallback(
                 name = info?.name ?: "unknown name",
                 entryDirPath = info?.entryDirPath ?: "unknown path",
                 cover = info?.cover ?: "",
-                progress = 0f
+                progress = 0f,
+                outputType = info?.outputType ?: 1,
             )
         )
     }
@@ -26,11 +28,15 @@ class MyProgressCallback(
     override fun onFinish(info: VideoOutInfo?) {
         MiaoLog.debug { "onFinish(${info})" }
         appState.putTaskStatus(TaskStatus.InIdle)
+        if (info?.outputType == OutRecord.TYPE_MP3) {
+            service.scanExportedAudio(info.outFilePath)
+        }
         service.tryAddOutRecord(
             entryDirPath = info?.entryDirPath ?: "unknown path",
             outFilePath = info?.outFilePath ?: "unknown path",
             title = info?.name ?: "unknown name",
             cover = info?.cover ?: "",
+            type = info?.outputType ?: 1,
         )
     }
 

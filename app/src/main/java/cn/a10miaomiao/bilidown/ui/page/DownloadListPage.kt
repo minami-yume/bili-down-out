@@ -2,6 +2,7 @@ package cn.a10miaomiao.bilidown.ui.page
 
 import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.util.Log
 import android.widget.Toast
@@ -10,6 +11,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -27,6 +30,8 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import cn.a10miaomiao.bilidown.R
 import cn.a10miaomiao.bilidown.common.BiliDownFile
+import cn.a10miaomiao.bilidown.common.BiliDownOutFile
+import cn.a10miaomiao.bilidown.common.FileNameUtils
 import cn.a10miaomiao.bilidown.common.BiliDownUtils
 import cn.a10miaomiao.bilidown.common.MiaoLog
 import cn.a10miaomiao.bilidown.common.datastore.DataStoreKeys
@@ -37,7 +42,10 @@ import cn.a10miaomiao.bilidown.common.molecule.collectAction
 import cn.a10miaomiao.bilidown.common.molecule.rememberPresenter
 import cn.a10miaomiao.bilidown.entity.DownloadInfo
 import cn.a10miaomiao.bilidown.entity.DownloadItemInfo
+import cn.a10miaomiao.bilidown.entity.BiliDownloadEntryAndPathInfo
 import cn.a10miaomiao.bilidown.entity.DownloadType
+import cn.a10miaomiao.bilidown.db.dao.OutRecord
+import cn.a10miaomiao.bilidown.service.BiliDownService
 import cn.a10miaomiao.bilidown.shizuku.localShizukuPermission
 import cn.a10miaomiao.bilidown.ui.BiliDownScreen
 import cn.a10miaomiao.bilidown.ui.components.DownloadListItem
@@ -64,11 +72,13 @@ sealed class DownloadListPageAction {
     class GetList(
         val packageName: String,
         val enabledShizuku: Boolean,
+        val enabledZeroWidthPath: Boolean,
     ) : DownloadListPageAction()
 
     class RefreshList(
         val packageName: String,
         val enabledShizuku: Boolean,
+        val enabledZeroWidthPath: Boolean,
     ) : DownloadListPageAction()
 }
 
@@ -99,10 +109,11 @@ fun DownloadListPagePresenter(
     suspend fun getList(
         packageName: String,
         enabledShizuku: Boolean,
+        enabledZeroWidthPath: Boolean,
     ) {
         try {
-            MiaoLog.debug { "getList(packageName:$packageName, enabledShizuku: $enabledShizuku)" }
-            val biliDownFile = BiliDownFile(context, packageName, enabledShizuku)
+            MiaoLog.debug { "getList(packageName:$packageName, enabledShizuku: $enabledShizuku, enabledZeroWidthPath: $enabledZeroWidthPath)" }
+            val biliDownFile = BiliDownFile(context, packageName, enabledShizuku, enabledZeroWidthPath)
             canRead = biliDownFile.canRead()
             if (!canRead) {
                 return
@@ -120,7 +131,7 @@ fun DownloadListPagePresenter(
                 var type = DownloadType.VIDEO
                 val page = biliEntry.page_data
                 if (page != null) {
-                    id = biliEntry.avid!!
+                    id = biliEntry.avid ?: page.cid
                     indexTitle = page.download_title ?: page.part ?: "${page.page}P"
                     cid = page.cid
                     type = DownloadType.VIDEO
@@ -129,7 +140,7 @@ fun DownloadListPagePresenter(
                 val ep = biliEntry.ep
                 val source = biliEntry.source
                 if (ep != null && source != null) {
-                    id = biliEntry.season_id!!.toLong()
+                    id = biliEntry.season_id?.toLongOrNull() ?: biliEntry.ep?.episode_id ?: 0L
                     indexTitle = ep.index_title
                     epid = ep.episode_id
                     cid = source.cid
@@ -204,14 +215,14 @@ fun DownloadListPagePresenter(
             is DownloadListPageAction.RefreshList -> {
                 refreshing = true
                 withContext(Dispatchers.IO) {
-                    getList(it.packageName, it.enabledShizuku)
+                    getList(it.packageName, it.enabledShizuku, it.enabledZeroWidthPath)
                 }
                 refreshing = false
             }
 
             is DownloadListPageAction.GetList -> {
                 withContext(Dispatchers.IO) {
-                    getList(it.packageName, it.enabledShizuku)
+                    getList(it.packageName, it.enabledShizuku, it.enabledZeroWidthPath)
                 }
             }
         }
@@ -232,13 +243,54 @@ fun DownloadListPage(
     packageName: String,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var showPermissionDialog by remember { mutableStateOf(false) }
+    var showBatchExportDialog by remember { mutableStateOf(false) }
+    var showBatchMigrateDialog by remember { mutableStateOf(false) }
+    var targetApps by remember { mutableStateOf(emptyList<Pair<String, String>>()) }
+    var pendingBatchTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var batchTemplateVideos by remember { mutableStateOf(emptyList<BiliDownloadEntryAndPathInfo>()) }
+    var showBatchTemplatePicker by remember { mutableStateOf(false) }
+    var selectedBatchTemplate by remember { mutableStateOf<BiliDownloadEntryAndPathInfo?>(null) }
+    var batchMp4 by remember { mutableStateOf(true) }
+    var batchMp3 by remember { mutableStateOf(false) }
     val storagePermission = localStoragePermission()
     val permissionState = storagePermission.collectState()
     val shizukuPermission = localShizukuPermission()
     val shizukuPermissionState by shizukuPermission.collectState()
+    val enabledZeroWidthPath by rememberDataStorePreferencesFlow(
+        context = context,
+        key = DataStoreKeys.enabledZeroWidthPath,
+        initial = true,
+    ).collectAsState(true)
 
-    val (state, channel) = rememberPresenter(listOf(packageName, permissionState)) {
+    LaunchedEffect(packageName) {
+        val pm = context.packageManager
+        targetApps = BiliDownUtils.biliAppList
+            .filter { it.packageName != packageName }
+            .mapNotNull { app ->
+                val installed = try {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                        pm.getPackageInfo(app.packageName, PackageManager.PackageInfoFlags.of(0))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        pm.getPackageInfo(app.packageName, 0)
+                    }
+                    true
+                } catch (_: Exception) { false }
+                if (installed) app.packageName to app.name else null
+            }
+    }
+
+    LaunchedEffect(pendingBatchTarget, enabledZeroWidthPath, shizukuPermissionState.isEnabled) {
+        val target = pendingBatchTarget ?: return@LaunchedEffect
+        batchTemplateVideos = runCatching {
+            BiliDownFile(context, target.first, shizukuPermissionState.isEnabled, enabledZeroWidthPath).readDownloadList()
+        }.getOrDefault(emptyList())
+        showBatchTemplatePicker = true
+    }
+
+    val (state, channel) = rememberPresenter(listOf(packageName, permissionState, enabledZeroWidthPath)) {
         DownloadListPagePresenter(context, it)
     }
 
@@ -248,15 +300,16 @@ fun DownloadListPage(
         permissionState.isExternalStorage,
         shizukuPermissionState.isRunning,
         shizukuPermissionState.isEnabled,
+        enabledZeroWidthPath,
     ) {
-        if (state.list.isEmpty()
-            && permissionState.isGranted
+        if (permissionState.isGranted
             && permissionState.isExternalStorage
         ) {
             channel.send(
                 DownloadListPageAction.GetList(
                     packageName = packageName,
-                    shizukuPermissionState.isEnabled,
+                    enabledShizuku = shizukuPermissionState.isEnabled,
+                    enabledZeroWidthPath = enabledZeroWidthPath,
                 )
             )
         }
@@ -268,7 +321,8 @@ fun DownloadListPage(
                 channel.trySend(
                     DownloadListPageAction.GetList(
                         packageName = packageName,
-                        shizukuPermissionState.isEnabled,
+                        enabledShizuku = shizukuPermissionState.isEnabled,
+                        enabledZeroWidthPath = enabledZeroWidthPath,
                     )
                 )
             }
@@ -303,6 +357,146 @@ fun DownloadListPage(
         isGranted = permissionState.isGranted,
         onDismiss = { showPermissionDialog = false }
     )
+    if (showBatchExportDialog) {
+        AlertDialog(
+            onDismissRequest = { showBatchExportDialog = false },
+            title = { Text("一键全部导出") },
+            text = {
+                Column {
+                    val count = state.list.flatMap { it.items }.count { it.is_completed }
+                    Text("将队列导出当前客户端中已完成的 $count 个视频")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = batchMp4, onCheckedChange = { batchMp4 = it })
+                        Text("导出 MP4")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = batchMp3, onCheckedChange = { batchMp3 = it })
+                        Text("导出 MP3")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = batchMp4 || batchMp3,
+                    onClick = {
+                        val items = state.list.flatMap { it.items }
+                            .filter { it.is_completed }
+                            .distinctBy { it.dir_path }
+                        val reservedNames = mutableSetOf<String>()
+                        fun uniqueOutputName(baseTitle: String, extension: String): String {
+                            val safeTitle = FileNameUtils.sanitize(baseTitle).ifBlank { "未命名" }
+                            var candidate = "$safeTitle.$extension"
+                            var suffix = 2
+                            while (candidate in reservedNames || BiliDownOutFile(candidate).exists()) {
+                                candidate = "${safeTitle}_$suffix.$extension"
+                                suffix++
+                            }
+                            reservedNames.add(candidate)
+                            return candidate
+                        }
+                        showBatchExportDialog = false
+                        scope.launch {
+                            val service = BiliDownService.getService(context)
+                            items.forEach { item ->
+                                if (batchMp4) {
+                                    val file = BiliDownOutFile(uniqueOutputName(item.title, "mp4"))
+                                    service.addTask(item.dir_path, file.path, file.name, item.cover, OutRecord.TYPE_MP4)
+                                }
+                                if (batchMp3) {
+                                    val file = BiliDownOutFile(uniqueOutputName(item.title, "mp3"))
+                                    service.addTask(item.dir_path, file.path, file.name, item.cover, OutRecord.TYPE_MP3)
+                                }
+                            }
+                            navController.navigate(BiliDownScreen.Progress.route) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
+                    }
+                ) { Text("加入导出队列") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchExportDialog = false }) { Text("取消") }
+            },
+        )
+    }
+    if (showBatchMigrateDialog) {
+        AlertDialog(
+            onDismissRequest = { showBatchMigrateDialog = false },
+            title = { Text("一键迁移全部视频") },
+            text = {
+                Column {
+                    val sourceDirectories = state.list.map { it.dir_path }.distinct()
+                    Text("将当前客户端的 ${sourceDirectories.size} 个缓存目录复制到目标客户端，源文件会保留。")
+                    targetApps.forEach { (targetPackage, targetName) ->
+                        TextButton(onClick = {
+                            pendingBatchTarget = targetPackage to targetName
+                            showBatchMigrateDialog = false
+                        }) { Text(targetName) }
+                    }
+                    if (targetApps.isEmpty()) Text("未检测到其他已安装的支持客户端")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showBatchMigrateDialog = false }) { Text("关闭") }
+            },
+        )
+    }
+    if (showBatchTemplatePicker && pendingBatchTarget != null) {
+        val target = pendingBatchTarget!!
+        AlertDialog(
+            onDismissRequest = { showBatchTemplatePicker = false; pendingBatchTarget = null },
+            title = { Text("选择${target.second}的原生视频") },
+            text = {
+                Column {
+                    Text("请选择一个由目标客户端直接下载的视频作为 entry.json 模板；全部迁移的视频会使用这份模板转换。")
+                    if (batchTemplateVideos.isEmpty()) Text("无法读取目标客户端的视频缓存，请确认已下载视频并授予访问权限。")
+                    batchTemplateVideos.forEach { video ->
+                        TextButton(onClick = {
+                            selectedBatchTemplate = video
+                            showBatchTemplatePicker = false
+                        }) { Text(video.entry.title.ifBlank { video.entry.avid?.toString() ?: video.entryDirPath.substringAfterLast('/') }) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showBatchTemplatePicker = false; pendingBatchTarget = null }) { Text("取消") } },
+        )
+    }
+    selectedBatchTemplate?.let { template ->
+        val target = pendingBatchTarget
+        if (target != null) AlertDialog(
+            onDismissRequest = { selectedBatchTemplate = null; pendingBatchTarget = null },
+            title = { Text("确认全部迁移") },
+            text = { Text("将当前客户端的 ${state.list.map { it.dir_path }.distinct().size} 个缓存目录复制到${target.second}，并按所选视频的 entry.json 字段转换。源文件会保留，迁移后仍可能无法识别。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val sourceDirectories = state.list.map { it.dir_path }.distinct()
+                    scope.launch {
+                        val service = BiliDownService.getService(context)
+                        if (service.enqueueCacheMigrationBatch(
+                                sourceDirectories,
+                                packageName,
+                                target.first,
+                                enabledZeroWidthPath,
+                                template.rawEntryJson,
+                            )) {
+                            navController.navigate(BiliDownScreen.Progress.route) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        } else {
+                            Toast.makeText(context, "没有可迁移的缓存目录", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    selectedBatchTemplate = null
+                    pendingBatchTarget = null
+                }) { Text("开始迁移") }
+            },
+            dismissButton = { TextButton(onClick = { selectedBatchTemplate = null; pendingBatchTarget = null }) { Text("取消") } },
+        )
+    }
     SwipeToRefresh(
         refreshing = state.refreshing,
         onRefresh = {
@@ -310,6 +504,7 @@ fun DownloadListPage(
                 DownloadListPageAction.RefreshList(
                     packageName = packageName,
                     enabledShizuku = shizukuPermissionState.isEnabled,
+                    enabledZeroWidthPath = enabledZeroWidthPath,
                 )
             )
         },
@@ -359,15 +554,19 @@ fun DownloadListPage(
                         }
                     }
                 } else if (!state.canRead) {
-                    Text(text = "请授予文件夹权限")
-                    Spacer(modifier = Modifier.height(20.dp))
-                    Button(
-                        onClick = {
-                            val biliDownFile = BiliDownFile(context, packageName, shizukuPermissionState.isEnabled)
-                            biliDownFile.startFor(2)
+                    if (enabledZeroWidthPath) {
+                        Text(text = "零宽路径访问失败，请在设置中关闭该选项后使用文件夹授权")
+                    } else {
+                        Text(text = "请授予文件夹权限")
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Button(
+                            onClick = {
+                                val biliDownFile = BiliDownFile(context, packageName, shizukuPermissionState.isEnabled, enabledZeroWidthPath)
+                                biliDownFile.startFor(2)
+                            }
+                        ) {
+                            Text(text = "授予权限")
                         }
-                    ) {
-                        Text(text = "授予权限")
                     }
                     TextButton(
                         onClick = {
@@ -412,6 +611,21 @@ fun DownloadListPage(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 80.dp),
             ) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            modifier = Modifier.weight(1f),
+                            onClick = { showBatchExportDialog = true },
+                        ) { Text("一键全部导出", maxLines = 1) }
+                        Button(
+                            modifier = Modifier.weight(1f),
+                            onClick = { showBatchMigrateDialog = true },
+                        ) { Text("一键迁移全部视频", maxLines = 1) }
+                    }
+                }
                 items(state.list, { it.dir_path }) {
                     DownloadListItem(
                         item = it,

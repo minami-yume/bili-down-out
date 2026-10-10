@@ -8,4 +8,6 @@ object DataStoreKeys {
     val appPackageNameSet = stringSetPreferencesKey("app_package_name_set")
 
     val enabledShizuku = booleanPreferencesKey("enabled_shizuku")
+
+    val enabledZeroWidthPath = booleanPreferencesKey("enabled_zero_width_path")
 }

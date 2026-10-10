@@ -18,8 +18,8 @@ interface OutRecordDao {
     @Query("SELECT * FROM out_record WHERE input_path IN (:entryDirPaths)")
     suspend fun getAllByEntryDirPaths(entryDirPaths: Array<String>): List<OutRecord>
 
-    @Query("SELECT * FROM out_record WHERE input_path=:path")
-    suspend fun findByPath(path: String): OutRecord?
+    @Query("SELECT * FROM out_record WHERE input_path=:path AND type=:type LIMIT 1")
+    suspend fun findByPath(path: String, type: Int = 1): OutRecord?
 
     @Insert
     suspend fun insertAll(vararg task: OutRecord)

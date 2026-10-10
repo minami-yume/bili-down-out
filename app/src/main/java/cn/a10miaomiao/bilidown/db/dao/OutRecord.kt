@@ -18,6 +18,8 @@ data class OutRecord (
     @ColumnInfo(name = "update_time") val updateTime: Long,
 ) {
     companion object {
+        const val TYPE_MP4 = 1
+        const val TYPE_MP3 = 2
         const val STATUS_WAIT = 0
         const val STATUS_SUCCESS = 1
         const val STATUS_FAIL = 2

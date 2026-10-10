@@ -17,6 +17,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cn.a10miaomiao.bilidown.common.UrlUtil
 import cn.a10miaomiao.bilidown.entity.DownloadItemInfo
+import cn.a10miaomiao.bilidown.db.dao.OutRecord
 import coil.compose.AsyncImage
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -27,7 +28,8 @@ fun DownloadDetailItem(
     onClick: () -> Unit,
     onStartClick: () -> Unit,
     onPauseClick: (taskId: Long) -> Unit,
-    onExportClick: () -> Unit,
+    onExportClick: (Int) -> Unit,
+    onDeleteClick: () -> Unit,
 ) {
     var expandedMoreMenu by remember { mutableStateOf(false) }
 
@@ -90,11 +92,27 @@ fun DownloadDetailItem(
                             DropdownMenuItem(
                                 onClick = {
                                     expandedMoreMenu = false
-                                    onExportClick()
+                                    onExportClick(OutRecord.TYPE_MP4)
                                 },
                                 text = {
-                                    Text(text = "导出视频")
+                                    Text(text = "导出为 MP4")
                                 }
+                            )
+                            DropdownMenuItem(
+                                onClick = {
+                                    expandedMoreMenu = false
+                                    onExportClick(OutRecord.TYPE_MP3)
+                                },
+                                text = {
+                                    Text(text = "导出为 MP3")
+                                }
+                            )
+                            DropdownMenuItem(
+                                onClick = {
+                                    expandedMoreMenu = false
+                                    onDeleteClick()
+                                },
+                                text = { Text("删除视频缓存") },
                             )
                         }
                     }

@@ -5,6 +5,7 @@ sealed class TaskStatus {
     open val name: String = ""
     open val cover: String = ""
     open val progress = 0f
+    open val outputType = 1
 
     object InIdle : TaskStatus()
 
@@ -13,6 +14,7 @@ sealed class TaskStatus {
         override val name: String,
         override val cover: String,
         override val progress: Float,
+        override val outputType: Int = 1,
 //            val videoFile: MiaoDocumentFile,
 //            val audioFile: MiaoDocumentFile,
     ) : TaskStatus()
@@ -22,6 +24,7 @@ sealed class TaskStatus {
         override val name: String,
         override val cover: String,
         override val progress: Float,
+        override val outputType: Int = 1,
     ) : TaskStatus()
 
     data class InProgress(
@@ -29,6 +32,16 @@ sealed class TaskStatus {
         override val name: String,
         override val cover: String,
         override val progress: Float,
+        override val outputType: Int = 1,
+    ) : TaskStatus()
+
+    data class Migrating(
+        override val entryDirPath: String,
+        override val name: String,
+        override val cover: String,
+        override val progress: Float,
+        val completedDirectories: Int,
+        val totalDirectories: Int,
     ) : TaskStatus()
 
     data class Error(
@@ -37,6 +50,7 @@ sealed class TaskStatus {
         override val cover: String,
         override val progress: Float,
         val message: String,
+        override val outputType: Int = 1,
     ) : TaskStatus() {
         constructor(
             status: TaskStatus,
@@ -46,7 +60,8 @@ sealed class TaskStatus {
             status.name,
             status.cover,
             status.progress,
-            message
+            message,
+            status.outputType,
         )
     }
 }

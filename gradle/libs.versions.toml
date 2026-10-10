@@ -2,6 +2,7 @@
 kotlin = "1.9.22"
 
 androidx-core = "1.13.1"
+androidx-annotation = "1.9.1"
 androidx-activity = "1.8.2"
 compose = "1.7.0"
 compose-bom = "2024.09.00"
@@ -37,6 +38,7 @@ ksp-plugin = "1.9.22-1.0.17"
 
 [libraries]
 # androidx
+androidx-annotation = { group = "androidx.annotation", name = "annotation", version.ref = "androidx-annotation" }
 androidx-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "androidx-core" }
 androidx-activity-core = { group = "androidx.activity", name = "activity", version.ref = "androidx-activity" }
 androidx-activity-ktx = { group = "androidx.activity", name = "activity-ktx", version.ref = "androidx-activity" }

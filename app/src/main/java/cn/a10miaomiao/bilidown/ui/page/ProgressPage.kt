@@ -182,6 +182,13 @@ fun TaskProgress(
                                     color = MaterialTheme.colorScheme.outline,
                                     overflow = TextOverflow.Ellipsis,
                                 )
+                            } else if (status is TaskStatus.Migrating) {
+                                Text(
+                                    text = "正在迁移：第 ${status.completedDirectories + 1}/${status.totalDirectories} 个缓存目录",
+                                    maxLines = 1,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             } else if (status is TaskStatus.Copying) {
                                 Text(
                                     text = "导出复制中",
@@ -206,10 +213,14 @@ fun TaskProgress(
                             }
                         }
                     }
-                    LinearProgressIndicator(
-                        progress = status.progress,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    if (status.progress < 0f) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    } else {
+                        LinearProgressIndicator(
+                            progress = status.progress,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
         }

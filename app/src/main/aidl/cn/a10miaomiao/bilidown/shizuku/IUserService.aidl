@@ -16,4 +16,10 @@ interface IUserService {
     List<BiliDownloadEntryAndPathInfo> readDownloadDirectory(String path) = 4;
 
     String exportBiliVideo(String entryDirPath, String outFilePath, ProgressCallback callback) = 5;
+
+    String exportBiliAudio(String entryDirPath, String outFilePath, ProgressCallback callback) = 6;
+
+    String migrateCache(String sourceDirectoryPath, String targetDirectoryPath, String targetEntryTemplate) = 7;
+
+    String deleteCacheEntry(String sourceDirectoryPath, String sourcePackageName) = 8;
 }
