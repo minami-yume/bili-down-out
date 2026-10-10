@@ -34,13 +34,14 @@ class BiliDownFile(
     }
     var path = ""
     var list = emptyList<String>()
-    private var useZeroWidthPath = false
+    private val accessMode = AndroidDataAccessMode.resolve(enabledShizuku, enabledZeroWidthPath)
+    private val useZeroWidthPath = accessMode == AndroidDataAccessMode.ZERO_WIDTH
 
     fun canRead(): Boolean {
-        if (enabledShizuku) {
+        if (accessMode == AndroidDataAccessMode.SHIZUKU) {
             return true
         }
-        if (enabledZeroWidthPath) {
+        if (useZeroWidthPath) {
             // Try the U+200B path first. On Android builds where this path works,
             // no SAF/Android-data folder grant is needed.
             val zeroWidthDir = try {
@@ -61,15 +62,14 @@ class BiliDownFile(
                 } == true
             }
             if (canAccessDownloadPath) {
-                useZeroWidthPath = true
                 return true
             }
-            useZeroWidthPath = false
             return false
         }
 
-        // Preserve the existing SAF authorization flow when direct access fails.
-        useZeroWidthPath = false
+        // In SAF mode, use only the user-authorized tree. Do not silently try a
+        // different route when its permission is missing. On pre-Q devices the
+        // same branch checks the normal, directly accessible path.
         val authorizedDir = try {
             createMiaoFile(DIR_DOWNLOAD)
         } catch (_: Exception) {
@@ -81,10 +81,11 @@ class BiliDownFile(
 
     @Throws(TimeoutCancellationException::class)
     suspend fun readDownloadList(): List<BiliDownloadEntryAndPathInfo> {
+        if (!canRead()) return emptyList()
         val downloadDir = createMiaoFile(DIR_DOWNLOAD)
         val list = mutableListOf<BiliDownloadEntryAndPathInfo>()
         MiaoLog.debug { enabledShizuku.toString() }
-        if (enabledShizuku) {
+        if (accessMode == AndroidDataAccessMode.SHIZUKU) {
             MiaoLog.debug { downloadDir.path }
             val userService = RemoteServiceUtil.getUserService()
             list.addAll(userService.readDownloadList(downloadDir.path))
@@ -103,7 +104,7 @@ class BiliDownFile(
     }
 
     suspend fun readDownloadDirectory(dir: MiaoFile): List<BiliDownloadEntryAndPathInfo> {
-        if (enabledShizuku) {
+        if (accessMode == AndroidDataAccessMode.SHIZUKU) {
             val userService = RemoteServiceUtil.getUserService()
             return userService.readDownloadDirectory(dir.path)
         }
@@ -149,16 +150,21 @@ class BiliDownFile(
     private fun createMiaoFile(
         dirName: String,
     ): MiaoFile {
-        if (!enabledShizuku && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {  // 10以上
-            if (useZeroWidthPath) return createZeroWidthFile(dirName)
-            return MiaoDocumentFile(
+        if (accessMode == AndroidDataAccessMode.SHIZUKU) {
+            return MiaoJavaFile(File(getExternalDir(), dirName))
+        }
+        when (accessMode) {
+            AndroidDataAccessMode.ZERO_WIDTH -> return createZeroWidthFile(dirName)
+            AndroidDataAccessMode.SAF -> return MiaoDocumentFile(
                 context,
                 getDocumentFileId(),
                 File.separator + dirName
             )
+            AndroidDataAccessMode.SHIZUKU -> return MiaoJavaFile(File(getExternalDir(), dirName))
+            AndroidDataAccessMode.DIRECT_FILE -> Unit
         }
-        var file = File(getExternalDir(), dirName)
-        if (!enabledShizuku && !file.exists()) {
+        val file = File(getExternalDir(), dirName)
+        if (!file.exists()) {
             file.mkdir()
         }
         return MiaoJavaFile(file)

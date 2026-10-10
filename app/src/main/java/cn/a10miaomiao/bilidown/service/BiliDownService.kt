@@ -12,6 +12,7 @@ import androidx.documentfile.provider.DocumentFile
 import cn.a10miaomiao.bilidown.BiliDownApp
 import cn.a10miaomiao.bilidown.common.BiliEntryJsonParser
 import cn.a10miaomiao.bilidown.common.BiliEntryJsonCompatibility
+import cn.a10miaomiao.bilidown.common.AndroidDataAccessMode
 import cn.a10miaomiao.bilidown.common.CommandUtil
 import cn.a10miaomiao.bilidown.common.MiaoLog
 import cn.a10miaomiao.bilidown.common.file.MiaoDocumentFile
@@ -473,32 +474,45 @@ class BiliDownService :
         useZeroWidthPath: Boolean,
     ): Boolean = withContext(Dispatchers.IO) {
         try {
-            if (sourceDirectoryPath.startsWith("content:")) {
-                val directory = DocumentFile.fromTreeUri(this@BiliDownService, Uri.parse(sourceDirectoryPath))
-                    ?: throw IllegalStateException("无法打开视频缓存目录")
-                if (!directory.isDirectory || directory.name?.matches(Regex("\\d+")) != true) {
-                    throw IllegalStateException("删除路径不是按视频 ID 命名的缓存目录")
+            val mode = AndroidDataAccessMode.resolve(
+                appState.shizukuState.value.isEnabled,
+                useZeroWidthPath,
+            )
+            val relativeDownloadPath = if (sourcePackageName == "com.example.piliplus") "files/download" else "download"
+            when (mode) {
+                AndroidDataAccessMode.SHIZUKU -> {
+                    val userService = RemoteServiceUtil.getUserService()
+                    val error = userService.deleteCacheEntry(sourceDirectoryPath, sourcePackageName)
+                    if (error != null) throw IllegalStateException(error)
                 }
-                if (!directory.delete()) throw IllegalStateException("SAF 未能删除缓存目录")
-            } else if (appState.shizukuState.value.isEnabled) {
-                val userService = RemoteServiceUtil.getUserService()
-                val error = userService.deleteCacheEntry(sourceDirectoryPath, sourcePackageName)
-                if (error != null) throw IllegalStateException(error)
-            } else {
-                val path = sourceDirectoryPath
-                val relativeDownloadPath = if (sourcePackageName == "com.example.piliplus") "files/download" else "download"
-                val allowedRoots = buildList {
-                    add("/storage/emulated/0/Android/data/$sourcePackageName/$relativeDownloadPath/")
-                    if (useZeroWidthPath) add("/storage/emulated/0\u200B/Android/data/$sourcePackageName/$relativeDownloadPath/")
+                AndroidDataAccessMode.SAF -> {
+                    if (!sourceDirectoryPath.startsWith("content:")) {
+                        throw IllegalStateException("当前列表不是通过文件夹授权读取的，请刷新后重试")
+                    }
+                    val directory = DocumentFile.fromTreeUri(this@BiliDownService, Uri.parse(sourceDirectoryPath))
+                        ?: throw IllegalStateException("无法打开视频缓存目录")
+                    if (!directory.isDirectory || directory.name?.matches(Regex("\\d+")) != true) {
+                        throw IllegalStateException("删除路径不是按视频 ID 命名的缓存目录")
+                    }
+                    if (!directory.delete()) throw IllegalStateException("SAF 未能删除缓存目录")
                 }
-                val allowedRoot = allowedRoots.firstOrNull { path.startsWith(it) }
-                    ?: throw IllegalStateException("拒绝删除下载目录以外的路径")
-                if (!path.removePrefix(allowedRoot).matches(Regex("\\d+"))) {
-                    throw IllegalStateException("删除路径必须是下载目录下按视频 ID 命名的文件夹")
+                AndroidDataAccessMode.ZERO_WIDTH,
+                AndroidDataAccessMode.DIRECT_FILE -> {
+                    val expectedRoot = if (mode == AndroidDataAccessMode.ZERO_WIDTH) {
+                        "/storage/emulated/0\u200B/Android/data/$sourcePackageName/$relativeDownloadPath/"
+                    } else {
+                        "/storage/emulated/0/Android/data/$sourcePackageName/$relativeDownloadPath/"
+                    }
+                    if (!sourceDirectoryPath.startsWith(expectedRoot)) {
+                        throw IllegalStateException("当前列表路径与所选访问方式不一致，请刷新后重试")
+                    }
+                    if (!sourceDirectoryPath.removePrefix(expectedRoot).matches(Regex("\\d+"))) {
+                        throw IllegalStateException("删除路径必须是下载目录下按视频 ID 命名的文件夹")
+                    }
+                    val directory = File(sourceDirectoryPath)
+                    if (!directory.isDirectory) throw IllegalStateException("找不到要删除的视频缓存目录")
+                    if (!directory.deleteRecursively()) throw IllegalStateException("无法完整删除缓存目录")
                 }
-                val directory = File(path)
-                if (!directory.isDirectory) throw IllegalStateException("找不到要删除的视频缓存目录")
-                if (!directory.deleteRecursively()) throw IllegalStateException("无法完整删除缓存目录")
             }
             true
         } catch (e: Exception) {
@@ -515,7 +529,11 @@ class BiliDownService :
         targetEntryTemplate: String,
         showSuccessToast: Boolean = true,
     ): Boolean = withContext(Dispatchers.IO) {
-        val shizukuEnabled = appState.shizukuState.value.isEnabled
+        val accessMode = AndroidDataAccessMode.resolve(
+            appState.shizukuState.value.isEnabled,
+            useZeroWidthPath,
+        )
+        val shizukuEnabled = accessMode == AndroidDataAccessMode.SHIZUKU
         // A path returned by a list read through U+200B must be normalized for Shizuku.
         // Also pass this normalized value to the remote service (not the original path).
         val sourcePath = if (shizukuEnabled) {
@@ -531,10 +549,11 @@ class BiliDownService :
         } else {
             "download"
         }
-        val useDirectFileAccess = useZeroWidthPath || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+        val directZeroWidthAccess = accessMode == AndroidDataAccessMode.ZERO_WIDTH
+        val useDirectFileAccess = directZeroWidthAccess || accessMode == AndroidDataAccessMode.DIRECT_FILE
         val destinationName = when {
             shizukuEnabled -> "/storage/emulated/0/Android/data/$targetPackageName/$downloadRelativePath/$sourceName"
-            useZeroWidthPath -> "/storage/emulated/0\u200B/Android/data/$targetPackageName/$downloadRelativePath/$sourceName"
+            directZeroWidthAccess -> "/storage/emulated/0\u200B/Android/data/$targetPackageName/$downloadRelativePath/$sourceName"
             Build.VERSION.SDK_INT < Build.VERSION_CODES.Q -> "/storage/emulated/0/Android/data/$targetPackageName/$downloadRelativePath/$sourceName"
             else -> ""
         }
@@ -543,6 +562,21 @@ class BiliDownService :
             if (sourceName.isBlank()) {
                 toast("无法从源路径识别缓存目录名称：$sourceDirectoryPath")
                 return@withContext false
+            }
+            when (accessMode) {
+                AndroidDataAccessMode.ZERO_WIDTH -> if (!sourcePath.startsWith("/storage/emulated/0\u200B/Android/data/")) {
+                    toast("源缓存路径不是零宽路径，请刷新列表后重试")
+                    return@withContext false
+                }
+                AndroidDataAccessMode.SAF -> if (!sourceIsDocument) {
+                    toast("源缓存路径不是文件夹授权路径，请刷新列表后重试")
+                    return@withContext false
+                }
+                AndroidDataAccessMode.DIRECT_FILE -> if (sourceIsDocument) {
+                    toast("源缓存路径与当前文件访问方式不一致，请刷新列表后重试")
+                    return@withContext false
+                }
+                AndroidDataAccessMode.SHIZUKU -> Unit
             }
             if (shizukuEnabled) {
                 val userService = RemoteServiceUtil.getUserService()
